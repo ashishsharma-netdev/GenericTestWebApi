@@ -25,7 +25,7 @@ public class AdminUsersController(TestPrepDbContext db, AdminAuditService audit)
     }
 
     [HttpGet("{id:int}")]
-    public async Task<IActionResult> User(int id, CancellationToken ct)
+    public async Task<IActionResult> GetUser(int id, CancellationToken ct)
     {
         var user = await db.Users.AsNoTracking().Include(x => x.UserRoles).ThenInclude(x => x.Role).SingleOrDefaultAsync(x => x.Id == id, ct);
         if (user is null) return NotFound(new { message = "User not found." });
