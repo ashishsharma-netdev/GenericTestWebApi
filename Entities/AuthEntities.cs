@@ -45,7 +45,8 @@ public class TestAttemptEntity
     public int UserId { get; set; }
     public int MockTestId { get; set; }
     public DateTime StartedAtUtc { get; set; }
-    public DateTime SubmittedAtUtc { get; set; }
+    public DateTime? SubmittedAtUtc { get; set; }
+    public bool IsSubmitted { get; set; }
     public int TimeTakenSeconds { get; set; }
     public int Correct { get; set; }
     public int Incorrect { get; set; }
