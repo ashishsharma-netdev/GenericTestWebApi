@@ -11,6 +11,7 @@ public static class DbInitializer
         // Neon uses PostgreSQL, so EF Core is responsible for creating the schema.
         // This keeps initialization provider-neutral and avoids SQL Server-specific DDL.
         await db.Database.EnsureCreatedAsync();
+        await EnsureSchemaCompatibilityAsync(db);
         await SeedRolesAndAdmin(db);
         await SeedSubscriptionPlans(db);
         if (await db.ExamCategories.AnyAsync()) return;
@@ -28,6 +29,15 @@ public static class DbInitializer
             db.MockTests.AddRange(new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Full Mock Test 02", TotalQuestions=8, TotalMarks=8, DurationMinutes=60, NegativeMarking=.5m }, new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Previous Year Paper (2023)", TotalQuestions=8, TotalMarks=8, DurationMinutes=60, NegativeMarking=.5m, Tag="PYQ" }, new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Sectional Test - Quant", TotalQuestions=2, TotalMarks=2, DurationMinutes=30, NegativeMarking=.5m }, new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Sectional Test - Reasoning", TotalQuestions=2, TotalMarks=2, DurationMinutes=30, NegativeMarking=.5m }, new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Sectional Test - English", TotalQuestions=2, TotalMarks=2, DurationMinutes=30, NegativeMarking=.5m });
         }
         await db.SaveChangesAsync();
+    }
+
+    private static async Task EnsureSchemaCompatibilityAsync(TestPrepDbContext db)
+    {
+        // The Neon database may have been created by an earlier version of the model.
+        // Ensure the current attempt lifecycle column exists before any dashboard/history query runs.
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"TestAttempts\" ADD COLUMN IF NOT EXISTS \"IsSubmitted\" boolean NOT NULL DEFAULT FALSE;");
+        await db.Database.ExecuteSqlRawAsync("UPDATE \"TestAttempts\" SET \"IsSubmitted\" = TRUE WHERE \"SubmittedAtUtc\" IS NOT NULL AND \"IsSubmitted\" = FALSE;");
+        await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_TestAttempts_UserId_MockTestId_IsSubmitted\" ON \"TestAttempts\" (\"UserId\", \"MockTestId\", \"IsSubmitted\");");
     }
 
     private static async Task SeedRolesAndAdmin(TestPrepDbContext db)
