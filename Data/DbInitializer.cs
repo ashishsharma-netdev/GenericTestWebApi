@@ -1,4 +1,5 @@
 using GenericTestWebApi.Entities;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
 namespace GenericTestWebApi.Data;
@@ -8,38 +9,33 @@ public static class DbInitializer
     public static async Task InitializeAsync(TestPrepDbContext db)
     {
         await db.Database.EnsureCreatedAsync();
+        await AuthSchemaBootstrap.EnsureAsync(db);
+        await SeedRolesAndAdmin(db);
         if (await db.ExamCategories.AnyAsync()) return;
-
         var categories = new[]
         {
-            new ExamCategoryEntity { Name="SSC", Description="CGL, CHSL, MTS, GD, Stenographer", Icon="◉", Accent="#e33434" },
-            new ExamCategoryEntity { Name="Railway", Description="RRB NTPC, Group D, ALP, JE", Icon="◆", Accent="#18a957" },
-            new ExamCategoryEntity { Name="Bank", Description="IBPS, SBI, RRB, PO, Clerk", Icon="▥", Accent="#1877d2" },
-            new ExamCategoryEntity { Name="State Exam", Description="PSC, Police, SI, TET and more", Icon="♜", Accent="#f07824" },
-            new ExamCategoryEntity { Name="UPSC", Description="Civil Services (IAS/IPS/IFS)", Icon="♛", Accent="#6546d9" },
-            new ExamCategoryEntity { Name="CAT", Description="Common Admission Test", Icon="∞", Accent="#db3b91" },
-            new ExamCategoryEntity { Name="CTET", Description="Central Teacher Eligibility Test", Icon="◌", Accent="#12a9bb" }
+            new ExamCategoryEntity { Name="SSC", Description="CGL, CHSL, MTS, GD, Stenographer", Icon="◉", Accent="#e33434" }, new ExamCategoryEntity { Name="Railway", Description="RRB NTPC, Group D, ALP, JE", Icon="◆", Accent="#18a957" },
+            new ExamCategoryEntity { Name="Bank", Description="IBPS, SBI, RRB, PO, Clerk", Icon="▥", Accent="#1877d2" }, new ExamCategoryEntity { Name="State Exam", Description="PSC, Police, SI, TET and more", Icon="♜", Accent="#f07824" },
+            new ExamCategoryEntity { Name="UPSC", Description="Civil Services (IAS/IPS/IFS)", Icon="♛", Accent="#6546d9" }, new ExamCategoryEntity { Name="CAT", Description="Common Admission Test", Icon="∞", Accent="#db3b91" }, new ExamCategoryEntity { Name="CTET", Description="Central Teacher Eligibility Test", Icon="◌", Accent="#12a9bb" }
         };
-        db.ExamCategories.AddRange(categories);
-        await db.SaveChangesAsync();
-
+        db.ExamCategories.AddRange(categories); await db.SaveChangesAsync();
         foreach (var category in categories)
         {
-            var test = new MockTestEntity
-            {
-                ExamCategoryId = category.Id, Title = $"{category.Name} Full Mock Test 01",
-                TotalQuestions = 8, TotalMarks = 8, DurationMinutes = 60, NegativeMarking = .5m, Tag = "Latest Pattern"
-            };
-            db.MockTests.Add(test);
-            await db.SaveChangesAsync();
-            db.TestQuestions.AddRange(GetQuestions(test.Id));
-            db.MockTests.Add(new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Full Mock Test 02", TotalQuestions=8, TotalMarks=8, DurationMinutes=60, NegativeMarking=.5m });
-            db.MockTests.Add(new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Previous Year Paper (2023)", TotalQuestions=8, TotalMarks=8, DurationMinutes=60, NegativeMarking=.5m, Tag="PYQ" });
-            db.MockTests.Add(new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Sectional Test - Quant", TotalQuestions=2, TotalMarks=2, DurationMinutes=30, NegativeMarking=.5m });
-            db.MockTests.Add(new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Sectional Test - Reasoning", TotalQuestions=2, TotalMarks=2, DurationMinutes=30, NegativeMarking=.5m });
-            db.MockTests.Add(new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Sectional Test - English", TotalQuestions=2, TotalMarks=2, DurationMinutes=30, NegativeMarking=.5m });
+            var test = new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Full Mock Test 01", TotalQuestions=8, TotalMarks=8, DurationMinutes=60, NegativeMarking=.5m, Tag="Latest Pattern" };
+            db.MockTests.Add(test); await db.SaveChangesAsync(); db.TestQuestions.AddRange(GetQuestions(test.Id));
+            db.MockTests.AddRange(new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Full Mock Test 02", TotalQuestions=8, TotalMarks=8, DurationMinutes=60, NegativeMarking=.5m }, new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Previous Year Paper (2023)", TotalQuestions=8, TotalMarks=8, DurationMinutes=60, NegativeMarking=.5m, Tag="PYQ" }, new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Sectional Test - Quant", TotalQuestions=2, TotalMarks=2, DurationMinutes=30, NegativeMarking=.5m }, new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Sectional Test - Reasoning", TotalQuestions=2, TotalMarks=2, DurationMinutes=30, NegativeMarking=.5m }, new MockTestEntity { ExamCategoryId=category.Id, Title=$"{category.Name} Sectional Test - English", TotalQuestions=2, TotalMarks=2, DurationMinutes=30, NegativeMarking=.5m });
         }
         await db.SaveChangesAsync();
+    }
+
+    private static async Task SeedRolesAndAdmin(TestPrepDbContext db)
+    {
+        foreach(var name in new[]{"Admin","PremiumUser","FreeUser"}) if(!await db.Roles.AnyAsync(x=>x.Name==name)) db.Roles.Add(new RoleEntity{Name=name});
+        await db.SaveChangesAsync();
+        const string email="admin@testprep.local";
+        if(await db.Users.AnyAsync(x=>x.Email==email)) return;
+        var admin=new UserEntity{FullName="TestPrep Administrator",Email=email}; admin.PasswordHash=new PasswordHasher<UserEntity>().HashPassword(admin,"Admin@123"); db.Users.Add(admin); await db.SaveChangesAsync();
+        var role=await db.Roles.SingleAsync(x=>x.Name=="Admin"); db.UserRoles.Add(new UserRoleEntity{UserId=admin.Id,RoleId=role.Id}); await db.SaveChangesAsync();
     }
 
     private static IEnumerable<TestQuestionEntity> GetQuestions(int testId) => new[]
