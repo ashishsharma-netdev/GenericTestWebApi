@@ -3,6 +3,7 @@ using Google.Apis.Auth;
 using GenericTestWebApi.Auth;
 using GenericTestWebApi.Data;
 using GenericTestWebApi.Entities;
+using GenericTestWebApi.Services;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -11,7 +12,7 @@ namespace GenericTestWebApi.Controllers;
 
 [ApiController]
 [Route("api/auth")]
-public class AuthController(TestPrepDbContext db, JwtTokenService tokens, IConfiguration configuration) : ControllerBase
+public class AuthController(TestPrepDbContext db, JwtTokenService tokens, IConfiguration configuration, SubscriptionLifecycleService lifecycle) : ControllerBase
 {
     [HttpPost("register")]
     public async Task<IActionResult> Register(RegisterRequest request)
@@ -26,15 +27,17 @@ public class AuthController(TestPrepDbContext db, JwtTokenService tokens, IConfi
     }
 
     [HttpPost("login")]
-    public async Task<IActionResult> Login(LoginRequest request)
+    public async Task<IActionResult> Login(LoginRequest request, CancellationToken cancellationToken)
     {
-        var email=request.Email.Trim().ToLowerInvariant(); var user=await db.Users.Include(x=>x.UserRoles).ThenInclude(x=>x.Role).SingleOrDefaultAsync(x=>x.Email==email && x.IsActive);
-        if(user is null || new PasswordHasher<UserEntity>().VerifyHashedPassword(user,user.PasswordHash,request.Password)!=PasswordVerificationResult.Success) return Unauthorized(new {message="Invalid email or password."});
+        var email=request.Email.Trim().ToLowerInvariant(); var user=await db.Users.Include(x=>x.UserRoles).ThenInclude(x=>x.Role).SingleOrDefaultAsync(x=>x.Email==email);
+        if(user is null || !user.IsActive || new PasswordHasher<UserEntity>().VerifyHashedPassword(user,user.PasswordHash,request.Password)!=PasswordVerificationResult.Success) return Unauthorized(new {message="Invalid email or password."});
+        await lifecycle.ExpireUserSubscriptionsAsync(user.Id, cancellationToken);
+        user.UserRoles = await db.UserRoles.Where(x=>x.UserId==user.Id).Include(x=>x.Role).ToListAsync(cancellationToken);
         return Ok(await IssueTokens(user));
     }
 
     [HttpPost("google")]
-    public async Task<IActionResult> GoogleLogin(GoogleLoginRequest request)
+    public async Task<IActionResult> GoogleLogin(GoogleLoginRequest request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.IdToken)) return BadRequest(new { message = "Google ID token is required." });
         var clientId = configuration["Google:ClientId"];
@@ -64,7 +67,7 @@ public class AuthController(TestPrepDbContext db, JwtTokenService tokens, IConfi
                     return Conflict(new { message = "This email is already linked to another Google account." });
                 user.GoogleSubject = payload.Subject;
                 if (string.IsNullOrWhiteSpace(user.FullName)) user.FullName = payload.Name ?? email.Split('@')[0];
-                await db.SaveChangesAsync();
+                await db.SaveChangesAsync(cancellationToken);
             }
             else
             {
@@ -76,23 +79,27 @@ public class AuthController(TestPrepDbContext db, JwtTokenService tokens, IConfi
                 };
                 user.PasswordHash = new PasswordHasher<UserEntity>().HashPassword(user, Guid.NewGuid().ToString("N"));
                 db.Users.Add(user);
-                await db.SaveChangesAsync();
-                var role = await db.Roles.SingleAsync(x=>x.Name=="FreeUser");
+                await db.SaveChangesAsync(cancellationToken);
+                var role = await db.Roles.SingleAsync(x=>x.Name=="FreeUser", cancellationToken);
                 db.UserRoles.Add(new UserRoleEntity { UserId=user.Id, RoleId=role.Id });
-                await db.SaveChangesAsync();
-                user.UserRoles = await db.UserRoles.Where(x=>x.UserId==user.Id).Include(x=>x.Role).ToListAsync();
+                await db.SaveChangesAsync(cancellationToken);
+                user.UserRoles = await db.UserRoles.Where(x=>x.UserId==user.Id).Include(x=>x.Role).ToListAsync(cancellationToken);
             }
         }
 
         if (!user.IsActive) return Unauthorized(new { message = "This account is inactive." });
+        await lifecycle.ExpireUserSubscriptionsAsync(user.Id, cancellationToken);
+        user.UserRoles = await db.UserRoles.Where(x=>x.UserId==user.Id).Include(x=>x.Role).ToListAsync(cancellationToken);
         return Ok(await IssueTokens(user));
     }
 
     [HttpPost("refresh")]
-    public async Task<IActionResult> Refresh(RefreshRequest request)
+    public async Task<IActionResult> Refresh(RefreshRequest request, CancellationToken cancellationToken)
     {
         var hash=tokens.HashRefreshToken(request.RefreshToken); var token=await db.RefreshTokens.Include(x=>x.User).ThenInclude(x=>x.UserRoles).ThenInclude(x=>x.Role).SingleOrDefaultAsync(x=>x.TokenHash==hash && x.RevokedAtUtc==null && x.ExpiresAtUtc>DateTime.UtcNow);
         if(token is null || !token.User.IsActive) return Unauthorized(new {message="Refresh token is invalid or expired."});
+        await lifecycle.ExpireUserSubscriptionsAsync(token.User.Id, cancellationToken);
+        token.User.UserRoles = await db.UserRoles.Where(x=>x.UserId==token.User.Id).Include(x=>x.Role).ToListAsync(cancellationToken);
         token.RevokedAtUtc=DateTime.UtcNow; return Ok(await IssueTokens(token.User));
     }
 
@@ -100,7 +107,7 @@ public class AuthController(TestPrepDbContext db, JwtTokenService tokens, IConfi
     public async Task<IActionResult> Logout(RefreshRequest request){var hash=tokens.HashRefreshToken(request.RefreshToken);var token=await db.RefreshTokens.SingleOrDefaultAsync(x=>x.TokenHash==hash);if(token!=null){token.RevokedAtUtc=DateTime.UtcNow;await db.SaveChangesAsync();}return NoContent();}
 
     [HttpGet("me")]
-    public async Task<IActionResult> Me(){if(!int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier),out var id))return Unauthorized();var user=await db.Users.Include(x=>x.UserRoles).ThenInclude(x=>x.Role).AsNoTracking().SingleOrDefaultAsync(x=>x.Id==id);if(user is null)return Unauthorized();return Ok(new{id=user.Id,fullName=user.FullName,email=user.Email,roles=user.UserRoles.Select(x=>x.Role.Name)});}
+    public async Task<IActionResult> Me(){if(!int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier),out var id))return Unauthorized();var user=await db.Users.Include(x=>x.UserRoles).ThenInclude(x=>x.Role).AsNoTracking().SingleOrDefaultAsync(x=>x.Id==id);if(user is null || !user.IsActive)return Unauthorized();return Ok(new{id=user.Id,fullName=user.FullName,email=user.Email,roles=user.UserRoles.Select(x=>x.Role.Name)});}
 
     private async Task<object> IssueTokens(UserEntity user)
     {
