@@ -24,7 +24,7 @@ public class SubscriptionsController(TestPrepDbContext db, RazorpayService razor
         if (!TryGetUserId(out var userId)) return Unauthorized();
         await lifecycle.ExpireUserSubscriptionsAsync(userId, cancellationToken);
         var subscription = await db.Subscriptions.AsNoTracking().Include(x => x.Plan).Where(x => x.UserId == userId && x.Status == "Active" && x.ExpiresAtUtc > DateTime.UtcNow).OrderByDescending(x => x.ExpiresAtUtc).FirstOrDefaultAsync(cancellationToken);
-        if (subscription is null) return Ok(new { isPremium = false, subscription = (object?)null });
+        if (subscription is null) return Ok(new { isPremium = false, daysRemaining = 0, isExpiringSoon = false, subscription = (object?)null });
         var daysRemaining = Math.Max(0, (int)Math.Ceiling((subscription.ExpiresAtUtc!.Value - DateTime.UtcNow).TotalDays));
         return Ok(new { isPremium = true, daysRemaining, isExpiringSoon = daysRemaining <= 7, subscription = new { subscription.Id, plan = subscription.Plan.Name, subscription.Plan.Code, subscription.Plan.Price, subscription.Plan.Currency, subscription.StartedAtUtc, subscription.ExpiresAtUtc, subscription.Status } });
     }
@@ -85,8 +85,15 @@ public class SubscriptionsController(TestPrepDbContext db, RazorpayService razor
     private async Task ActivateSubscriptionAsync(SubscriptionEntity subscription, CancellationToken cancellationToken)
     {
         var now = DateTime.UtcNow;
-        var baseDate = subscription.ExpiresAtUtc > now ? subscription.ExpiresAtUtc!.Value : now;
-        subscription.StartedAtUtc ??= now; subscription.ExpiresAtUtc = baseDate.AddDays(subscription.Plan.DurationDays); subscription.Status = "Active";
+        var currentExpiry = await db.Subscriptions.AsNoTracking()
+            .Where(x => x.UserId == subscription.UserId && x.Id != subscription.Id && x.Status == "Active" && x.ExpiresAtUtc > now)
+            .Select(x => x.ExpiresAtUtc)
+            .OrderByDescending(x => x)
+            .FirstOrDefaultAsync(cancellationToken);
+        var baseDate = currentExpiry.HasValue && currentExpiry.Value > now ? currentExpiry.Value : now;
+        subscription.StartedAtUtc ??= now;
+        subscription.ExpiresAtUtc = baseDate.AddDays(subscription.Plan.DurationDays);
+        subscription.Status = "Active";
         var premiumRole = await db.Roles.SingleAsync(x => x.Name == "PremiumUser", cancellationToken);
         var freeRole = await db.Roles.SingleAsync(x => x.Name == "FreeUser", cancellationToken);
         var roles = await db.UserRoles.Where(x => x.UserId == subscription.UserId).ToListAsync(cancellationToken);
