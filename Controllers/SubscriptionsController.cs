@@ -2,6 +2,7 @@ using System.Security.Claims;
 using GenericTestWebApi.Data;
 using GenericTestWebApi.Entities;
 using GenericTestWebApi.Payments;
+using GenericTestWebApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -10,7 +11,7 @@ namespace GenericTestWebApi.Controllers;
 
 [ApiController]
 [Route("api/subscriptions")]
-public class SubscriptionsController(TestPrepDbContext db, RazorpayService razorpay) : ControllerBase
+public class SubscriptionsController(TestPrepDbContext db, RazorpayService razorpay, SubscriptionLifecycleService lifecycle) : ControllerBase
 {
     [HttpGet("plans")]
     [AllowAnonymous]
@@ -18,12 +19,33 @@ public class SubscriptionsController(TestPrepDbContext db, RazorpayService razor
 
     [HttpGet("me")]
     [Authorize]
-    public async Task<IActionResult> Me()
+    public async Task<IActionResult> Me(CancellationToken cancellationToken)
     {
         if (!TryGetUserId(out var userId)) return Unauthorized();
-        await ExpireSubscriptionsAsync(userId);
-        var subscription = await db.Subscriptions.AsNoTracking().Include(x => x.Plan).Where(x => x.UserId == userId && x.Status == "Active").OrderByDescending(x => x.ExpiresAtUtc).FirstOrDefaultAsync();
-        return Ok(subscription is null ? new { isPremium = false, subscription = (object?)null } : new { isPremium = true, subscription = new { subscription.Id, plan = subscription.Plan.Name, subscription.Plan.Code, subscription.Plan.Price, subscription.Plan.Currency, subscription.StartedAtUtc, subscription.ExpiresAtUtc, subscription.Status } });
+        await lifecycle.ExpireUserSubscriptionsAsync(userId, cancellationToken);
+        var subscription = await db.Subscriptions.AsNoTracking().Include(x => x.Plan).Where(x => x.UserId == userId && x.Status == "Active" && x.ExpiresAtUtc > DateTime.UtcNow).OrderByDescending(x => x.ExpiresAtUtc).FirstOrDefaultAsync(cancellationToken);
+        if (subscription is null) return Ok(new { isPremium = false, subscription = (object?)null });
+        var daysRemaining = Math.Max(0, (int)Math.Ceiling((subscription.ExpiresAtUtc!.Value - DateTime.UtcNow).TotalDays));
+        return Ok(new { isPremium = true, daysRemaining, isExpiringSoon = daysRemaining <= 7, subscription = new { subscription.Id, plan = subscription.Plan.Name, subscription.Plan.Code, subscription.Plan.Price, subscription.Plan.Currency, subscription.StartedAtUtc, subscription.ExpiresAtUtc, subscription.Status } });
+    }
+
+    [HttpGet("history")]
+    [Authorize]
+    public async Task<IActionResult> History(CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId)) return Unauthorized();
+        await lifecycle.ExpireUserSubscriptionsAsync(userId, cancellationToken);
+        var items = await db.Subscriptions.AsNoTracking().Include(x => x.Plan).Where(x => x.UserId == userId).OrderByDescending(x => x.CreatedAtUtc).Select(x => new { x.Id, plan = x.Plan.Name, code = x.Plan.Code, x.Status, x.StartedAtUtc, x.ExpiresAtUtc, x.CreatedAtUtc, providerOrderId = x.ProviderOrderId }).ToListAsync(cancellationToken);
+        return Ok(items);
+    }
+
+    [HttpGet("payments")]
+    [Authorize]
+    public async Task<IActionResult> Payments(CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId)) return Unauthorized();
+        var items = await db.Payments.AsNoTracking().Include(x => x.Subscription).Where(x => x.UserId == userId).OrderByDescending(x => x.CreatedAtUtc).Select(x => new { x.Id, x.Amount, x.Currency, x.Status, x.Provider, x.ProviderOrderId, x.ProviderPaymentId, x.CreatedAtUtc, x.PaidAtUtc, subscriptionId = x.SubscriptionId }).ToListAsync(cancellationToken);
+        return Ok(items);
     }
 
     [HttpPost("create-order")]
@@ -31,6 +53,7 @@ public class SubscriptionsController(TestPrepDbContext db, RazorpayService razor
     public async Task<IActionResult> CreateOrder(CreateOrderRequest request, CancellationToken cancellationToken)
     {
         if (!TryGetUserId(out var userId)) return Unauthorized();
+        await lifecycle.ExpireUserSubscriptionsAsync(userId, cancellationToken);
         var plan = await db.SubscriptionPlans.SingleOrDefaultAsync(x => x.Id == request.PlanId && x.IsActive, cancellationToken);
         if (plan is null) return NotFound(new { message = "Subscription plan not found." });
         if (!razorpay.IsConfigured) return StatusCode(503, new { message = "Razorpay is not configured on the server." });
@@ -70,17 +93,6 @@ public class SubscriptionsController(TestPrepDbContext db, RazorpayService razor
         if (!roles.Any(x => x.RoleId == premiumRole.Id)) db.UserRoles.Add(new UserRoleEntity { UserId = subscription.UserId, RoleId = premiumRole.Id });
         foreach (var role in roles.Where(x => x.RoleId == freeRole.Id)) db.UserRoles.Remove(role);
         await db.SaveChangesAsync(cancellationToken);
-    }
-
-    private async Task ExpireSubscriptionsAsync(int userId)
-    {
-        var expired = await db.Subscriptions.Where(x => x.UserId == userId && x.Status == "Active" && x.ExpiresAtUtc <= DateTime.UtcNow).ToListAsync();
-        if (expired.Count == 0) return;
-        foreach (var item in expired) item.Status = "Expired";
-        var premiumRole = await db.Roles.SingleAsync(x => x.Name == "PremiumUser"); var freeRole = await db.Roles.SingleAsync(x => x.Name == "FreeUser");
-        var premium = await db.UserRoles.SingleOrDefaultAsync(x => x.UserId == userId && x.RoleId == premiumRole.Id); if (premium is not null) db.UserRoles.Remove(premium);
-        if (!await db.UserRoles.AnyAsync(x => x.UserId == userId && x.RoleId == freeRole.Id)) db.UserRoles.Add(new UserRoleEntity { UserId = userId, RoleId = freeRole.Id });
-        await db.SaveChangesAsync();
     }
 
     private bool TryGetUserId(out int userId) => int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out userId);
