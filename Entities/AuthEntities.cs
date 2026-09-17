@@ -6,6 +6,7 @@ public class UserEntity
     public string FullName { get; set; } = "";
     public string Email { get; set; } = "";
     public string PasswordHash { get; set; } = "";
+    public string? GoogleSubject { get; set; }
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public ICollection<UserRoleEntity> UserRoles { get; set; } = new List<UserRoleEntity>();
