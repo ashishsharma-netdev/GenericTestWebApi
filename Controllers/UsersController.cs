@@ -58,7 +58,6 @@ public class UsersController(TestPrepDbContext db) : ControllerBase
         if (!int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id)) return null;
         return await db.Users
             .Include(x => x.UserRoles).ThenInclude(x => x.Role)
-            .AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == id && x.IsActive);
     }
 
