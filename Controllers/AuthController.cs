@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Google.Apis.Auth;
 using GenericTestWebApi.Auth;
 using GenericTestWebApi.Data;
 using GenericTestWebApi.Entities;
@@ -10,7 +11,7 @@ namespace GenericTestWebApi.Controllers;
 
 [ApiController]
 [Route("api/auth")]
-public class AuthController(TestPrepDbContext db, JwtTokenService tokens) : ControllerBase
+public class AuthController(TestPrepDbContext db, JwtTokenService tokens, IConfiguration configuration) : ControllerBase
 {
     [HttpPost("register")]
     public async Task<IActionResult> Register(RegisterRequest request)
@@ -29,6 +30,65 @@ public class AuthController(TestPrepDbContext db, JwtTokenService tokens) : Cont
     {
         var email=request.Email.Trim().ToLowerInvariant(); var user=await db.Users.Include(x=>x.UserRoles).ThenInclude(x=>x.Role).SingleOrDefaultAsync(x=>x.Email==email && x.IsActive);
         if(user is null || new PasswordHasher<UserEntity>().VerifyHashedPassword(user,user.PasswordHash,request.Password)!=PasswordVerificationResult.Success) return Unauthorized(new {message="Invalid email or password."});
+        return Ok(await IssueTokens(user));
+    }
+
+    [HttpPost("google")]
+    public async Task<IActionResult> GoogleLogin(GoogleLoginRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.IdToken)) return BadRequest(new { message = "Google ID token is required." });
+        var clientId = configuration["Google:ClientId"];
+        if (string.IsNullOrWhiteSpace(clientId)) return StatusCode(503, new { message = "Google Sign-In is not configured on the server." });
+
+        GoogleJsonWebSignature.Payload payload;
+        try
+        {
+            payload = await GoogleJsonWebSignature.ValidateAsync(request.IdToken, new GoogleJsonWebSignature.ValidationSettings
+            {
+                Audience = new[] { clientId }
+            });
+        }
+        catch (InvalidJwtException)
+        {
+            return Unauthorized(new { message = "Google ID token is invalid or expired." });
+        }
+
+        if (!payload.EmailVerified || string.IsNullOrWhiteSpace(payload.Subject) || string.IsNullOrWhiteSpace(payload.Email))
+            return Unauthorized(new { message = "Google account email could not be verified." });
+
+        var email = payload.Email.Trim().ToLowerInvariant();
+        var user = await db.Users.Include(x=>x.UserRoles).ThenInclude(x=>x.Role).SingleOrDefaultAsync(x=>x.GoogleSubject==payload.Subject);
+
+        if (user is null)
+        {
+            user = await db.Users.Include(x=>x.UserRoles).ThenInclude(x=>x.Role).SingleOrDefaultAsync(x=>x.Email==email);
+            if (user is not null)
+            {
+                if (!string.IsNullOrWhiteSpace(user.GoogleSubject) && user.GoogleSubject != payload.Subject)
+                    return Conflict(new { message = "This email is already linked to another Google account." });
+                user.GoogleSubject = payload.Subject;
+                if (string.IsNullOrWhiteSpace(user.FullName)) user.FullName = payload.Name ?? email.Split('@')[0];
+            }
+            else
+            {
+                user = new UserEntity
+                {
+                    FullName = string.IsNullOrWhiteSpace(payload.Name) ? email.Split('@')[0] : payload.Name,
+                    Email = email,
+                    GoogleSubject = payload.Subject,
+                    PasswordHash = new PasswordHasher<UserEntity>().HashPassword(null!, Guid.NewGuid().ToString("N"))
+                };
+                db.Users.Add(user);
+                await db.SaveChangesAsync();
+                var role = await db.Roles.SingleAsync(x=>x.Name=="FreeUser");
+                db.UserRoles.Add(new UserRoleEntity { UserId=user.Id, RoleId=role.Id });
+                await db.SaveChangesAsync();
+                await db.Entry(user).Collection(x=>x.UserRoles).Query().Include(x=>x.Role).LoadAsync();
+            }
+            await db.SaveChangesAsync();
+        }
+
+        if (!user.IsActive) return Unauthorized(new { message = "This account is inactive." });
         return Ok(await IssueTokens(user));
     }
 
@@ -53,5 +113,6 @@ public class AuthController(TestPrepDbContext db, JwtTokenService tokens) : Cont
     }
     public record RegisterRequest(string FullName,string Email,string Password);
     public record LoginRequest(string Email,string Password);
+    public record GoogleLoginRequest(string IdToken);
     public record RefreshRequest(string RefreshToken);
 }
