@@ -8,8 +8,9 @@ public static class DbInitializer
 {
     public static async Task InitializeAsync(TestPrepDbContext db)
     {
+        // Neon uses PostgreSQL, so EF Core is responsible for creating the schema.
+        // This keeps initialization provider-neutral and avoids SQL Server-specific DDL.
         await db.Database.EnsureCreatedAsync();
-        await AuthSchemaBootstrap.EnsureAsync(db);
         await SeedRolesAndAdmin(db);
         await SeedSubscriptionPlans(db);
         if (await db.ExamCategories.AnyAsync()) return;
