@@ -43,10 +43,7 @@ public class AuthController(TestPrepDbContext db, JwtTokenService tokens, IConfi
         GoogleJsonWebSignature.Payload payload;
         try
         {
-            payload = await GoogleJsonWebSignature.ValidateAsync(request.IdToken, new GoogleJsonWebSignature.ValidationSettings
-            {
-                Audience = new[] { clientId }
-            });
+            payload = await GoogleJsonWebSignature.ValidateAsync(request.IdToken, new GoogleJsonWebSignature.ValidationSettings { Audience = new[] { clientId } });
         }
         catch (InvalidJwtException)
         {
@@ -58,7 +55,6 @@ public class AuthController(TestPrepDbContext db, JwtTokenService tokens, IConfi
 
         var email = payload.Email.Trim().ToLowerInvariant();
         var user = await db.Users.Include(x=>x.UserRoles).ThenInclude(x=>x.Role).SingleOrDefaultAsync(x=>x.GoogleSubject==payload.Subject);
-
         if (user is null)
         {
             user = await db.Users.Include(x=>x.UserRoles).ThenInclude(x=>x.Role).SingleOrDefaultAsync(x=>x.Email==email);
@@ -68,6 +64,7 @@ public class AuthController(TestPrepDbContext db, JwtTokenService tokens, IConfi
                     return Conflict(new { message = "This email is already linked to another Google account." });
                 user.GoogleSubject = payload.Subject;
                 if (string.IsNullOrWhiteSpace(user.FullName)) user.FullName = payload.Name ?? email.Split('@')[0];
+                await db.SaveChangesAsync();
             }
             else
             {
@@ -75,17 +72,16 @@ public class AuthController(TestPrepDbContext db, JwtTokenService tokens, IConfi
                 {
                     FullName = string.IsNullOrWhiteSpace(payload.Name) ? email.Split('@')[0] : payload.Name,
                     Email = email,
-                    GoogleSubject = payload.Subject,
-                    PasswordHash = new PasswordHasher<UserEntity>().HashPassword(null!, Guid.NewGuid().ToString("N"))
+                    GoogleSubject = payload.Subject
                 };
+                user.PasswordHash = new PasswordHasher<UserEntity>().HashPassword(user, Guid.NewGuid().ToString("N"));
                 db.Users.Add(user);
                 await db.SaveChangesAsync();
                 var role = await db.Roles.SingleAsync(x=>x.Name=="FreeUser");
                 db.UserRoles.Add(new UserRoleEntity { UserId=user.Id, RoleId=role.Id });
                 await db.SaveChangesAsync();
-                await db.Entry(user).Collection(x=>x.UserRoles).Query().Include(x=>x.Role).LoadAsync();
+                user.UserRoles = await db.UserRoles.Where(x=>x.UserId==user.Id).Include(x=>x.Role).ToListAsync();
             }
-            await db.SaveChangesAsync();
         }
 
         if (!user.IsActive) return Unauthorized(new { message = "This account is inactive." });
