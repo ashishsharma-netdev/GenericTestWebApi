@@ -17,6 +17,7 @@ public class TestPrepDbContext(DbContextOptions<TestPrepDbContext> options) : Db
     public DbSet<SubscriptionPlanEntity> SubscriptionPlans => Set<SubscriptionPlanEntity>();
     public DbSet<SubscriptionEntity> Subscriptions => Set<SubscriptionEntity>();
     public DbSet<PaymentEntity> Payments => Set<PaymentEntity>();
+    public DbSet<AdminAuditLogEntity> AdminAuditLogs => Set<AdminAuditLogEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -32,5 +33,6 @@ public class TestPrepDbContext(DbContextOptions<TestPrepDbContext> options) : Db
         modelBuilder.Entity<SubscriptionPlanEntity>(e=>{e.ToTable("SubscriptionPlans");e.HasKey(x=>x.Id);e.Property(x=>x.Name).HasMaxLength(100).IsRequired();e.Property(x=>x.Code).HasMaxLength(30).IsRequired();e.Property(x=>x.Price).HasPrecision(10,2);e.Property(x=>x.Currency).HasMaxLength(10).IsRequired();e.HasIndex(x=>x.Code).IsUnique();});
         modelBuilder.Entity<SubscriptionEntity>(e=>{e.ToTable("Subscriptions");e.HasKey(x=>x.Id);e.Property(x=>x.Provider).HasMaxLength(30).IsRequired();e.Property(x=>x.ProviderOrderId).HasMaxLength(100);e.Property(x=>x.ProviderPaymentId).HasMaxLength(100);e.Property(x=>x.Status).HasMaxLength(30).IsRequired();e.HasOne(x=>x.User).WithMany().HasForeignKey(x=>x.UserId).OnDelete(DeleteBehavior.Cascade);e.HasOne(x=>x.Plan).WithMany().HasForeignKey(x=>x.PlanId).OnDelete(DeleteBehavior.Restrict);e.HasIndex(x=>x.ProviderOrderId).IsUnique().HasFilter("[ProviderOrderId] IS NOT NULL");});
         modelBuilder.Entity<PaymentEntity>(e=>{e.ToTable("Payments");e.HasKey(x=>x.Id);e.Property(x=>x.Provider).HasMaxLength(30).IsRequired();e.Property(x=>x.ProviderOrderId).HasMaxLength(100).IsRequired();e.Property(x=>x.ProviderPaymentId).HasMaxLength(100);e.Property(x=>x.Amount).HasPrecision(10,2);e.Property(x=>x.Currency).HasMaxLength(10).IsRequired();e.Property(x=>x.Status).HasMaxLength(30).IsRequired();e.HasOne(x=>x.User).WithMany().HasForeignKey(x=>x.UserId).OnDelete(DeleteBehavior.Cascade);e.HasOne(x=>x.Subscription).WithMany(x=>x.Payments).HasForeignKey(x=>x.SubscriptionId).OnDelete(DeleteBehavior.SetNull);e.HasIndex(x=>x.ProviderOrderId);e.HasIndex(x=>x.ProviderPaymentId).IsUnique().HasFilter("[ProviderPaymentId] IS NOT NULL");});
+        modelBuilder.Entity<AdminAuditLogEntity>(e=>{e.ToTable("AdminAuditLogs");e.HasKey(x=>x.Id);e.Property(x=>x.Action).HasMaxLength(100).IsRequired();e.Property(x=>x.TargetType).HasMaxLength(50).IsRequired();e.Property(x=>x.Details).HasMaxLength(2000);e.HasIndex(x=>x.CreatedAtUtc);e.HasIndex(x=>new{x.TargetType,x.TargetId});e.HasOne<UserEntity>().WithMany().HasForeignKey(x=>x.AdminUserId).OnDelete(DeleteBehavior.Restrict);});
     }
 }
