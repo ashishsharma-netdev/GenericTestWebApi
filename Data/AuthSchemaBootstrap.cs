@@ -24,7 +24,8 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_RefreshTokens_Hash' AND 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_AttemptAnswers' AND object_id=OBJECT_ID('dbo.TestAttemptAnswers')) CREATE UNIQUE INDEX UX_AttemptAnswers ON dbo.TestAttemptAnswers(TestAttemptId,QuestionId);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_SubscriptionPlans_Code' AND object_id=OBJECT_ID('dbo.SubscriptionPlans')) CREATE UNIQUE INDEX UX_SubscriptionPlans_Code ON dbo.SubscriptionPlans(Code);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_Subscriptions_Order' AND object_id=OBJECT_ID('dbo.Subscriptions')) CREATE UNIQUE INDEX UX_Subscriptions_Order ON dbo.Subscriptions(ProviderOrderId) WHERE ProviderOrderId IS NOT NULL;
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_Payments_Payment' AND object_id=OBJECT_ID('dbo.Payments')) CREATE UNIQUE INDEX UX_Payments_Payment ON dbo.Payments(ProviderPaymentId) WHERE ProviderPaymentId IS NOT NULL;";
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_Payments_Payment' AND object_id=OBJECT_ID('dbo.Payments')) CREATE UNIQUE INDEX UX_Payments_Payment ON dbo.Payments(ProviderPaymentId) WHERE ProviderPaymentId IS NOT NULL;
+UPDATE dbo.MockTests SET IsFree = CASE WHEN Title LIKE '%Full Mock Test 01' OR Title LIKE '%Full Mock Test 02' THEN 1 ELSE 0 END WHERE Tag = 'Latest Pattern' OR Title LIKE '%Full Mock Test 02' OR Title LIKE '%Previous Year Paper (2023)' OR Title LIKE '%Sectional Test - %';";
         await db.Database.ExecuteSqlRawAsync(sql);
     }
 }
