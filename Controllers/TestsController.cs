@@ -34,6 +34,32 @@ public class TestsController(TestPrepDbContext db) : ControllerBase
     }
 
     [Authorize]
+    [HttpGet("attempts/active")]
+    public async Task<IActionResult> GetActiveAttempt()
+    {
+        if (!int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId)) return Unauthorized();
+        var active = await db.TestAttempts.AsNoTracking()
+            .Include(x => x.MockTest).ThenInclude(x => x.Questions)
+            .Include(x => x.Answers)
+            .Where(x => x.UserId == userId && !x.IsSubmitted)
+            .OrderByDescending(x => x.StartedAtUtc)
+            .FirstOrDefaultAsync();
+        if (active is null) return NoContent();
+        var elapsed = Math.Max(0, (int)(DateTime.UtcNow - active.StartedAtUtc).TotalSeconds);
+        var remaining = Math.Max(0, active.MockTest.DurationMinutes * 60 - elapsed);
+        return Ok(new
+        {
+            attemptId = active.Id,
+            testId = active.MockTestId,
+            test = new { active.MockTest.Id, category = active.MockTest.ExamCategory.Name, title = active.MockTest.Title, questions = active.MockTest.TotalQuestions, marks = active.MockTest.TotalMarks, durationMinutes = active.MockTest.DurationMinutes, negativeMarking = active.MockTest.NegativeMarking, active.MockTest.Tag, active.MockTest.IsFree },
+            startedAtUtc = active.StartedAtUtc,
+            elapsedSeconds = elapsed,
+            remainingSeconds = remaining,
+            answers = active.Answers.Select(a => new { questionId = a.QuestionId, answer = a.Answer, markedForReview = a.MarkedForReview })
+        });
+    }
+
+    [Authorize]
     [HttpPost("{testId:int}/start")]
     public async Task<IActionResult> Start(int testId)
     {
