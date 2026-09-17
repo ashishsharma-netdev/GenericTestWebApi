@@ -11,6 +11,7 @@ public static class DbInitializer
         await db.Database.EnsureCreatedAsync();
         await AuthSchemaBootstrap.EnsureAsync(db);
         await SeedRolesAndAdmin(db);
+        await SeedSubscriptionPlans(db);
         if (await db.ExamCategories.AnyAsync()) return;
         var categories = new[]
         {
@@ -36,6 +37,16 @@ public static class DbInitializer
         if(await db.Users.AnyAsync(x=>x.Email==email)) return;
         var admin=new UserEntity{FullName="TestPrep Administrator",Email=email}; admin.PasswordHash=new PasswordHasher<UserEntity>().HashPassword(admin,"Admin@123"); db.Users.Add(admin); await db.SaveChangesAsync();
         var role=await db.Roles.SingleAsync(x=>x.Name=="Admin"); db.UserRoles.Add(new UserRoleEntity{UserId=admin.Id,RoleId=role.Id}); await db.SaveChangesAsync();
+    }
+
+    private static async Task SeedSubscriptionPlans(TestPrepDbContext db)
+    {
+        if (await db.SubscriptionPlans.AnyAsync()) return;
+        db.SubscriptionPlans.AddRange(
+            new SubscriptionPlanEntity { Name="Monthly", Code="MONTHLY", Price=199m, Currency="INR", DurationDays=30, DisplayOrder=1 },
+            new SubscriptionPlanEntity { Name="Quarterly", Code="QUARTERLY", Price=499m, Currency="INR", DurationDays=90, DisplayOrder=2 },
+            new SubscriptionPlanEntity { Name="Yearly", Code="YEARLY", Price=1499m, Currency="INR", DurationDays=365, DisplayOrder=3 });
+        await db.SaveChangesAsync();
     }
 
     private static IEnumerable<TestQuestionEntity> GetQuestions(int testId) => new[]
