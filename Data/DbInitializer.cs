@@ -35,6 +35,8 @@ public static class DbInitializer
     {
         // The Neon database may have been created by an earlier version of the model.
         // Ensure the current attempt lifecycle column exists before any dashboard/history query runs.
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"TestAttempts\" ADD COLUMN IF NOT EXISTS \"SubmittedAtUtc\" timestamp with time zone NULL;");
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"TestAttempts\" ALTER COLUMN \"SubmittedAtUtc\" DROP NOT NULL;");
         await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"TestAttempts\" ADD COLUMN IF NOT EXISTS \"IsSubmitted\" boolean NOT NULL DEFAULT FALSE;");
         await db.Database.ExecuteSqlRawAsync("UPDATE \"TestAttempts\" SET \"IsSubmitted\" = TRUE WHERE \"SubmittedAtUtc\" IS NOT NULL AND \"IsSubmitted\" = FALSE;");
         await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_TestAttempts_UserId_MockTestId_IsSubmitted\" ON \"TestAttempts\" (\"UserId\", \"MockTestId\", \"IsSubmitted\");");
